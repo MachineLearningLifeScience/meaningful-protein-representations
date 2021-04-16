@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import torch
-from geoml import *
 import networkx as nx
 
 class DiscretizedManifold:

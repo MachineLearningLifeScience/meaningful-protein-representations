@@ -14,9 +14,9 @@ from scipy.special import softmax
 from copy import deepcopy
 
 import os, sys
-sys.path.append(os.path.join(os.path.dirname(__file__), "geoml"))
-from geoml.manifold import EmbeddedManifold, CubicSpline
-from geoml.discretized_manifold import DiscretizedManifold
+# sys.path.append(os.path.join(os.path.dirname(__file__), "geoml"))
+from .geoml.manifold import EmbeddedManifold, CubicSpline
+from .geoml.discretized_manifold import DiscretizedManifold
 
 # Mapping from amino acids to integers
 aa1_to_index = {'A': 0, 'C': 1, 'D': 2, 'E': 3, 'F': 4, 'G': 5, 'H': 6,
