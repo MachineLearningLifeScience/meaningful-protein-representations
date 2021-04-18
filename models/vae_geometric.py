@@ -12,6 +12,7 @@ from tqdm import tqdm
 import pickle as pkl
 from scipy.special import softmax
 from copy import deepcopy
+from itertools import chain
 
 import os, sys
 # sys.path.append(os.path.join(os.path.dirname(__file__), "geoml"))
@@ -69,6 +70,7 @@ class VAE(pl.LightningModule, EmbeddedManifold):
         super().__init__()
         self.hparams = hparams
 
+        self._train_encoder_only = False
         self.train_idx = int(data.shape[0] * self.hparams.train_fraction)
         self.val_idx = int(data.shape[0] * (self.hparams.train_fraction+self.hparams.val_fraction))
         self.data = data
@@ -180,7 +182,13 @@ class VAE(pl.LightningModule, EmbeddedManifold):
         return loss
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.parameters(), lr=self.hparams.lr)
+        if self._train_encoder_only:
+            return torch.optim.Adam(chain(self.encoder.parameters(),
+                                          self.encoder_mu.parameters(),
+                                          self.encoder_scale.parameters()), 
+                                    lr=self.hparams.lr)
+        else:        
+            return torch.optim.Adam(self.parameters(), lr=self.hparams.lr)
 
     def validation_step(self, batch, batch_idx):
         loss, recon_loss, kl_loss, acc = self._step(batch, batch_idx)
