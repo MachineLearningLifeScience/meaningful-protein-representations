@@ -183,6 +183,7 @@ class VAE(pl.LightningModule, EmbeddedManifold):
 
     def configure_optimizers(self):
         if self._train_encoder_only:
+            print("only training encoder")
             return torch.optim.Adam(chain(self.encoder.parameters(),
                                           self.encoder_mu.parameters(),
                                           self.encoder_scale.parameters()), 
