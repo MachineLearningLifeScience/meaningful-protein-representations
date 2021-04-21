@@ -54,9 +54,10 @@ class DistNet(nn.Module):
         return (t1 + t2 - t3).clamp(min=0.0)
 
     def forward(self, x):
-        D2 = self.__dist2__(x) # |x|-by-|points|
-        min_d = D2.min(dim=-1)[0] # smallest distance to clusters
-        return self.trans(min_d)
+        with torch.no_grad(): # To prevent backpropping back through to the dist points
+            D2 = self.__dist2__(x) # |x|-by-|points|
+            min_d = D2.min(dim=-1)[0] # smallest distance to clusters
+            return self.trans(min_d)
 
     def kmeans_initializer(self, embeddings):
         km = KMeans(n_clusters=self.num_points).fit(embeddings)
