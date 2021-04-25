@@ -211,7 +211,6 @@ class VAE(pl.LightningModule, EmbeddedManifold):
     def train_dataloader(self):        
         train_data = torch.utils.data.TensorDataset(self.data[self.perm[:self.train_idx]])
         if self.weights is not None:
-          print("Reweighing sequences")
           sampler = torch.utils.data.sampler.WeightedRandomSampler(self.weights[self.perm[:self.train_idx]], len(self.weights[:self.train_idx]))
           return torch.utils.data.DataLoader(train_data, batch_size=self.hparams.bs, sampler = sampler)
         else:
