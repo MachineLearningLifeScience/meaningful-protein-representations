@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import torch
 import networkx as nx
+from .manifold import CubicSpline
+from .curve import DiscreteCurve
 
 class DiscretizedManifold:
     def __init__(self, model, grid, use_diagonals=False):
