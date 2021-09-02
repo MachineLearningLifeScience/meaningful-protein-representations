@@ -1,0 +1,6 @@
+[console_scripts]
+tape-embed = tape.main:run_embed
+tape-eval = tape.main:run_eval
+tape-train = tape.main:run_train
+tape-train-distributed = tape.main:run_train_distributed
+
