@@ -234,28 +234,19 @@ class VAE(pl.LightningModule, EmbeddedManifold):
         return torch.utils.data.DataLoader(test_data, batch_size=self.hparams.bs)
     
     def embed(self, points, jacobian=False):
-            pass
+        pass
 
     def curve_energy(self, curve):
         if curve.dim() == 2: curve.unsqueeze_(0) # BxNxd
 
         recon = self.decode(curve, as_probs=True) # BxNxFxS
-        x = recon[:,:-1,:,:]; y = recon[:,1:,:,:];
-
-        dt = torch.norm(curve[:,:1,:] - curve[:,:-1,:], p=2, dim=-1) # BxN
-        energy = (2*(1 - (x * y).sum(dim=2))) # BxNxS
-        energy = energy.mean(dim=-1) # BxN
-        return (energy * dt).sum(dim=-1) # B
+        x = recon[:,:-1,:,:]; y = recon[:,1:,:,:]; # Bx(N-1)xFxS
+        dt = torch.norm(curve[:,:-1,:] - curve[:,1:,:], p=2, dim=-1) # Bx(N-1)
+        energy = (1-(x*y).sum(dim=2)).sum(dim=-1) # Bx(N-1) 
+        return 2*(energy * dt).sum(dim=-1)
 
     def curve_length(self, curve):
-        if curve.dim() == 2: curve.unsqueeze_(0)
-
-        recon = self.decode(curve, as_probs=True)
-        x = recon[:,:-1,:,:]; y = recon[:,1:,:,:]
-
-        length = (2*(1 - (x * y).sum(dim=2))) # BxNxS
-        return length.mean(dim=-1).sum(dim=-1)
-
+        return torch.sqrt(self.curve_energy(curve))
 
 def curve_energy(model, curve, weight=0.0):
     if curve.dim() == 2:
