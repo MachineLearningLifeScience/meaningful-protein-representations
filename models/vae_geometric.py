@@ -105,6 +105,9 @@ class VAE(pl.LightningModule, EmbeddedManifold):
         self.switch = False
         self._prior = None
 
+        # Setting to 1 to allow default behavior of beta=1
+        self.warmup_step = 1
+        
     @property
     def prior(self):
         if self._prior is None:
@@ -116,6 +119,12 @@ class VAE(pl.LightningModule, EmbeddedManifold):
     def prior(self, prior):
         self._prior = prior
 
+    @property
+    def beta(self):
+        if self.training:
+            self.warmup_step += 1
+        return min([float(self.warmup_step/self.hparams.kl_warmup_steps), 1.0])
+        
     def decode(self, z, as_probs=False, return_s=False):
         recon = self.decoder(z).reshape(*z.shape[:-1], len(aa1_to_index), -1)
         if self.switch:
@@ -166,7 +175,7 @@ class VAE(pl.LightningModule, EmbeddedManifold):
         recon, q_dist = self(x)
         recon_loss = self.loss_fn(recon, x).sum(dim=-1).mean()
         kl_loss = D.kl_divergence(q_dist, self.prior).mean()
-        loss = recon_loss + kl_loss
+        loss = recon_loss + self.beta * kl_loss
         acc = (recon.argmax(dim=1) == x)[x!=aa1_to_index['-']].float().mean()
         return loss, recon_loss, kl_loss, acc
 
@@ -232,6 +241,7 @@ class VAE(pl.LightningModule, EmbeddedManifold):
 
         recon = self.decode(curve, as_probs=True) # BxNxFxS
         x = recon[:,:-1,:,:]; y = recon[:,1:,:,:];
+
         dt = torch.norm(curve[:,:1,:] - curve[:,:-1,:], p=2, dim=-1) # BxN
         energy = (2*(1 - (x * y).sum(dim=2))) # BxNxS
         energy = energy.mean(dim=-1) # BxN
@@ -242,6 +252,7 @@ class VAE(pl.LightningModule, EmbeddedManifold):
 
         recon = self.decode(curve, as_probs=True)
         x = recon[:,:-1,:,:]; y = recon[:,1:,:,:]
+
         length = (2*(1 - (x * y).sum(dim=2))) # BxNxS
         return length.mean(dim=-1).sum(dim=-1)
 
@@ -261,7 +272,7 @@ def curve_energy(model, curve, weight=0.0):
     return (energy + regulizer).sum(dim=-1) # B
 
 
-def numeric_curve_optimizer(curve):
+def numeric_curve_optimizer(model, curve):
     optimizer = torch.optim.Adam([curve.parameters], lr=1e-2)
     alpha = torch.linspace(0, 1, 50).reshape((-1, 1))
     best_curve, best_loss = deepcopy(curve), float('inf')
@@ -291,6 +302,7 @@ def get_hparams(args=None):
     argparser.add_argument('-seed', default=123, type=int)
     argparser.add_argument('-train_fraction', default=0.8, type=float)
     argparser.add_argument('-val_fraction', default=0.1, type=float)
+    argparser.add_argument('-kl_warmup_steps', default=1, type=int)
 
     return argparser.parse_args(args)
 
