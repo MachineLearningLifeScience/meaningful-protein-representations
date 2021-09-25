@@ -185,7 +185,8 @@ class VAE(pl.LightningModule, EmbeddedManifold):
         self.log_dict({'train_loss': loss,
                        'train_recon': recon_loss,
                        'train_kl': kl_loss,
-                       'train_acc': acc},
+                       'train_acc': acc,
+                       'beta': self.beta},
                       prog_bar=True,
                       logger=True)
 
@@ -207,7 +208,8 @@ class VAE(pl.LightningModule, EmbeddedManifold):
         self.log_dict({'val_loss': loss,
                        'val_recon': recon_loss,
                        'val_kl': kl_loss,
-                       'val_acc': acc})
+                       'val_acc': acc,
+                       'beta': self.beta})
 
     def test_step(self, batch, batch_idx):
         loss, recon_loss, kl_loss, acc = self._step(batch, batch_idx)
@@ -215,7 +217,8 @@ class VAE(pl.LightningModule, EmbeddedManifold):
         self.log_dict({'test_loss': loss,
                        'test_recon': recon_loss,
                        'test_kl': kl_loss,
-                       'test_acc': acc})
+                       'test_acc': acc,
+                       'beta': self.beta})
 
     def train_dataloader(self):        
         train_data = torch.utils.data.TensorDataset(self.data[self.perm[:self.train_idx]])
