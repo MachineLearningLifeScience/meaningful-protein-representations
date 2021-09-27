@@ -67,7 +67,7 @@ class DistNet(nn.Module):
 
 
 class VAE(pl.LightningModule, EmbeddedManifold):
-    def __init__(self, data, weights, perm, hparams):
+    def __init__(self, data, weights, perm, hparams, aa_weights=None):
         super().__init__()
         self.hparams = hparams
 
@@ -96,7 +96,9 @@ class VAE(pl.LightningModule, EmbeddedManifold):
                 nn.Linear(500, length*len(aa1_to_index)))
 
         # self.loss_fn = nn.CrossEntropyLoss(reduction='none', ignore_index=aa1_to_index['-'])
-        self.loss_fn = nn.CrossEntropyLoss(reduction='none')
+        # self.loss_fn = nn.CrossEntropyLoss(reduction='none')
+        self.aa_weights = aa_weights
+        self.loss_fn = nn.CrossEntropyLoss(reduction='none', weight=aa_weights)
 
         self.prior = D.Independent(D.Normal(torch.zeros(2).to(self._device),
                                             torch.ones(2).to(self._device)), 1)
@@ -173,7 +175,8 @@ class VAE(pl.LightningModule, EmbeddedManifold):
     def _step(self, batch, batch_idx):
         x = batch[0].long()
         recon, q_dist = self(x)
-        recon_loss = self.loss_fn(recon, x).sum(dim=-1).mean()
+        #recon_loss = self.loss_fn(recon, x).sum(dim=-1).mean()
+        recon_loss = (self.loss_fn(recon, x).sum(dim=0) / self.aa_weights[x].sum(dim=0)).sum()
         kl_loss = D.kl_divergence(q_dist, self.prior).mean()
         loss = recon_loss + self.beta * kl_loss
         acc = (recon.argmax(dim=1) == x)[x!=aa1_to_index['-']].float().mean()
