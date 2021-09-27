@@ -175,8 +175,10 @@ class VAE(pl.LightningModule, EmbeddedManifold):
     def _step(self, batch, batch_idx):
         x = batch[0].long()
         recon, q_dist = self(x)
-        #recon_loss = self.loss_fn(recon, x).sum(dim=-1).mean()
-        recon_loss = (self.loss_fn(recon, x).sum(dim=0) / self.aa_weights[x].sum(dim=0)).sum()
+        if self.aa_weights:
+            recon_loss = (self.loss_fn(recon, x).sum(dim=0) / self.aa_weights[x].sum(dim=0)).sum()
+        else:
+            recon_loss = self.loss_fn(recon, x).sum(dim=-1).mean()
         kl_loss = D.kl_divergence(q_dist, self.prior).mean()
         loss = recon_loss + self.beta * kl_loss
         acc = (recon.argmax(dim=1) == x)[x!=aa1_to_index['-']].float().mean()
