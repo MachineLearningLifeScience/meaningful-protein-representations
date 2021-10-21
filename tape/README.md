@@ -1,10 +1,10 @@
-This is a forked version of the reposatory [https://github.com/songlab-cal/tape](https://github.com/songlab-cal/tape) which contains the code
-for running the first set of experiments belonging to the paper "What is a meaningful representation of protein sequences?" This reposatory
-contains all of the original code with a few adjustments and some added models and datasets. We refer to the original reposatory for more details.
+This is a forked version of the repository [https://github.com/songlab-cal/tape](https://github.com/songlab-cal/tape) which contains the code
+for running the first set of experiments belonging to the paper "What is a meaningful representation of protein sequences?" This repository
+contains all of the original code with a few adjustments and some added models and datasets. We refer to the original repository for more details.
 
 ## Setup
 
-* Clone reposatory
+* Clone repository
 * Run `python setup.py install` for installing the package
 Then we could embed it with the UniRep babbler-1900 model like so:
 
@@ -14,7 +14,7 @@ All the original tape data can be downloaded using the `download_data.sh` script
 
 For the `beta_lactamase` dataset used in this study, we provide a single `.fasta` file in the `data/beta` folder.
 
-For the unilanguage dataset, we refer to the original authors [reposatory](https://github.com/alrojo/UniLanguage)
+For the unilanguage dataset, we refer to the original authors [repository](https://github.com/alrojo/UniLanguage)
 where the relevant files can be downloaded by running the `get_data.py` file in the following way:
 
 ```python
