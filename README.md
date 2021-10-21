@@ -7,7 +7,7 @@ NS Detlefsen, S Hauberg, W Boomsma - arXiv preprint arXiv:2012.02679, 2020
 
 <dl>
 <dt>Table 1, Table 2 and Figure 2</dt>
-<dd>See tape subdirectory, containing a fork of the original TAPE code with our modifications.</dd>
+<dd>See <a href="https://github.com/MachineLearningLifeScience/meaningful-protein-representations/tree/master/tape">tape</a> subdirectory, containing a fork of the original TAPE code with our modifications.</dd>
 <dt>Figure 3,4,5, and 8</dt>
 <dd><a href="https://github.com/MachineLearningLifeScience/meaningful-protein-representations/blob/master/distances.ipynb">distances.ipynb jupyter notebook</aa> (<a href="https://colab.research.google.com/github/MachineLearningLifeScience/meaningful-protein-representations/blob/master/distances.ipynb">launch in colab</a>)</dd>
 <dt>Figure 6 and 7</dt>
