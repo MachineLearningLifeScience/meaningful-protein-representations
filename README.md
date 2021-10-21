@@ -5,8 +5,6 @@ This repository contains code to reproduce the results reported in the following
 What is a meaningful representation of protein sequences?
 NS Detlefsen, S Hauberg, W Boomsma - arXiv preprint arXiv:2012.02679, 2020
 
-The jupyter notebook can be loaded either locally, or using the following Google Colab links:
-
 <dl>
 <dt>Table 1, Table 2 and Figure 2</dt>
 <dd>See tape subdirectory, containing a fork of the original TAPE code with our modifications.</dd>
