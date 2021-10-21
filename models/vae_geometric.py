@@ -6,18 +6,19 @@ import torch.nn.functional as F
 import numpy as np
 from Bio import Phylo
 from sklearn.cluster import KMeans
-from argparse import ArgumentParser
+import argparse
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import pickle as pkl
-from scipy.special import softmax
+from scipy.special import softmax, erfinv
 from copy import deepcopy
 from itertools import chain
 
+
 import os, sys
-# sys.path.append(os.path.join(os.path.dirname(__file__), "geoml"))
 from .geoml.manifold import EmbeddedManifold, CubicSpline
 from .geoml.discretized_manifold import DiscretizedManifold
+
 
 # Mapping from amino acids to integers
 aa1_to_index = {'A': 0, 'C': 1, 'D': 2, 'E': 3, 'F': 4, 'G': 5, 'H': 6,
@@ -26,11 +27,12 @@ aa1_to_index = {'A': 0, 'C': 1, 'D': 2, 'E': 3, 'F': 4, 'G': 5, 'H': 6,
                 'Y': 19, 'X':20, 'Z': 21, '-': 22}
 aa1 = "ACDEFGHIKLMNPQRSTVWYXZ-"
 
+
 # Entropy network
 class translatedSigmoid(nn.Module):
     def __init__(self):
         super(translatedSigmoid, self).__init__()
-        self.beta = nn.Parameter(torch.tensor([3.5]))
+        self.beta = nn.Parameter(torch.tensor([-3.5]))
 
     def forward(self, x):
         beta = torch.nn.functional.softplus(self.beta)
@@ -77,33 +79,68 @@ class VAE(pl.LightningModule, EmbeddedManifold):
         self.data = data
         self.weights = weights
         self.perm = perm
-        length = data.shape[1]
+        self.length = data.shape[1]
+
+        zdim = self.hparams.zdim if "zdim" in self.hparams else 2
+        
+        self.encoder_architecture = [1500, 1500]#, 1500]
+        self.decoder_architecture = [100, 500]#, 500]
+
+        self.sparsity_prior_dictionary_size = 10
+        self.group_prior_n_patterns = 4
         
         self.encoder = nn.Sequential(
-                nn.Linear(length*len(aa1_to_index), 1500),
+                nn.Linear(self.length*len(aa1_to_index), self.encoder_architecture[0]),
                 nn.ReLU(),
-                nn.Linear(1500, 1500),
+                nn.Linear(self.encoder_architecture[0], self.encoder_architecture[1]),
                 nn.ReLU())
 
-        self.encoder_mu = nn.Linear(1500, 2)
-        self.encoder_scale = nn.Sequential(nn.Linear(1500, 2), nn.Softplus())
+        self.encoder_mu = nn.Linear(self.encoder_architecture[-1], zdim)
+        self.encoder_scale = nn.Sequential(nn.Linear(self.encoder_architecture[-1], zdim), nn.Softplus())
 
-        self.decoder = nn.Sequential(
-                nn.Linear(2, 100),
-                nn.ReLU(),
-                nn.Linear(100, 500),
-                nn.ReLU(),
-                nn.Linear(500, length*len(aa1_to_index)))
+        if "sparsity_prior" in self.hparams and self.hparams.sparsity_prior:
+        
+            self.decoder = nn.Sequential(
+                    nn.Linear(zdim, self.decoder_architecture[0]),
+                    nn.ReLU(),
+                    nn.Linear(self.decoder_architecture[0], self.decoder_architecture[1]),
+                    nn.ReLU())
 
-        # self.loss_fn = nn.CrossEntropyLoss(reduction='none', ignore_index=aa1_to_index['-'])
-        # self.loss_fn = nn.CrossEntropyLoss(reduction='none')
+            self.W = nn.Linear(self.decoder_architecture[-1], self.length * self.sparsity_prior_dictionary_size, bias = False)
+            self.C = nn.Linear(self.sparsity_prior_dictionary_size, len(aa1_to_index), bias = False)
+            self.S = nn.Linear(self.decoder_architecture[-1] // self.group_prior_n_patterns, self.length, bias = False)
+            self.bias = nn.Parameter(torch.ones(self.length, len(aa1_to_index)) * 0.1)
+            
+        else:
+            self.decoder = nn.Sequential(
+                    nn.Linear(zdim, self.decoder_architecture[0]),
+                    nn.ReLU(),
+                    nn.Linear(self.decoder_architecture[0], self.decoder_architecture[1]),
+                    nn.ReLU(),
+                    nn.Linear(self.decoder_architecture[-1], self.length*len(aa1_to_index)))
+
         self.aa_weights = aa_weights
-        self.loss_fn = nn.CrossEntropyLoss(reduction='none', weight=aa_weights)
+        if "mask_out_gaps" in self.hparams and self.hparams.mask_out_gaps:
+            self.loss_fn = nn.CrossEntropyLoss(reduction='none', weight=aa_weights, ignore_index=aa1_to_index['-'])
+        else:
+            self.loss_fn = nn.CrossEntropyLoss(reduction='none', weight=aa_weights)
 
-        self.prior = D.Independent(D.Normal(torch.zeros(2).to(self._device),
-                                            torch.ones(2).to(self._device)), 1)
+        self.prior = D.Independent(D.Normal(torch.zeros(zdim).to(self._device),
+                                            torch.ones(zdim).to(self._device)), 1)
 
-        self.distnet = DistNet(2, 200)
+        # As a prior on S, we place a Normal prior on S prior to the sigmoid, which means that we effectively use
+        # a logit-Normal distribution. We freely choose a sigma in this prior, and choose the mu so that
+        # most of the probability mass (set by sparsity_S_prior_quantile) is below 0.0 - translating into sigmoid values
+        # between zero and one
+        self.sparsity_S_prior_quantile = 0.01
+        self.sparsity_S_prior_sigma = 4.0
+        # Note that this formula is the quantile formula for a Normal
+        self.sparsity_S_prior_mu = np.sqrt(2.0) * self.sparsity_S_prior_sigma * erfinv(2.0 * self.sparsity_S_prior_quantile - 1.0)
+
+        self.sparsity_prior = D.Normal(self.sparsity_S_prior_mu,
+                                       self.sparsity_S_prior_sigma)
+        
+        self.distnet = DistNet(zdim, 200)
         self.switch = False
         self._prior = None
 
@@ -113,8 +150,9 @@ class VAE(pl.LightningModule, EmbeddedManifold):
     @property
     def prior(self):
         if self._prior is None:
-            self._prior =  D.Independent(D.Normal(torch.zeros(2).to(self.device),
-                                                  torch.ones(2).to(self.device)), 1)
+            zdim = self.hparams.zdim if "zdim" in self.hparams else 2
+            self._prior =  D.Independent(D.Normal(torch.zeros(zdim).to(self.device),
+                                                  torch.ones(zdim).to(self.device)), 1)
         return self._prior
 
     @prior.setter
@@ -128,7 +166,25 @@ class VAE(pl.LightningModule, EmbeddedManifold):
         return min([float(self.warmup_step/self.hparams.kl_warmup_steps), 1.0])
         
     def decode(self, z, as_probs=False, return_s=False):
-        recon = self.decoder(z).reshape(*z.shape[:-1], len(aa1_to_index), -1)
+
+        if "sparsity_prior" in self.hparams and self.hparams.sparsity_prior:
+            h = self.decoder(z)
+            S = torch.sigmoid(self.S.weight.transpose(0,1).repeat(self.group_prior_n_patterns, 1))
+
+            # Apply dictionary factorization
+            # W_out = torch.softplus(self.lambd) * (self.W @ self.C)
+            W = self.W.weight.transpose(0,1).view(self.decoder_architecture[-1], self.length, self.sparsity_prior_dictionary_size)
+            W_out = (W @ self.C.weight.transpose(0,1))
+
+            # Apply group sparsity
+            W_out = W_out * S.unsqueeze(-1)
+
+            # Apply linear transformation
+            recon = ((h @ W_out.view(self.decoder_architecture[-1], self.length*len(aa1_to_index))).view(*z.shape[:-1], self.length, -1) + self.bias.unsqueeze(0).unsqueeze(0)).transpose(-1, -2)
+            
+        else:
+            recon = self.decoder(z).reshape(*z.shape[:-1], len(aa1_to_index), -1)
+
         if self.switch:
             if not self.distnet.initialized:
                 train_embedding = [ ]
@@ -156,16 +212,16 @@ class VAE(pl.LightningModule, EmbeddedManifold):
         else:
             return recon
 
-    def forward(self, x):
+    def forward(self, x, n_samples=1):
         x = nn.functional.one_hot(x, len(aa1_to_index))
         h = self.encoder(x.float().reshape(x.shape[0], -1))
 
         q_dist = D.Independent(D.Normal(self.encoder_mu(h),
                                         self.encoder_scale(h) + 1e-4), 1)
-        z = q_dist.rsample()
+        z_samples = q_dist.rsample(torch.Size([n_samples]))
 
-        recon = self.decode(z)
-        return recon, q_dist
+        recon = self.decode(z_samples)
+        return recon, q_dist, z_samples
 
     def embedding(self, x):
         x = nn.functional.one_hot(x, len(aa1_to_index))
@@ -174,14 +230,31 @@ class VAE(pl.LightningModule, EmbeddedManifold):
 
     def _step(self, batch, batch_idx):
         x = batch[0].long()
-        recon, q_dist = self(x)
-        if self.aa_weights:
-            recon_loss = (self.loss_fn(recon, x).sum(dim=0) / self.aa_weights[x].sum(dim=0)).sum()
+        n_samples = 10 if self.hparams.iwae_bound else 1
+        recon, q_dist, z_samples = self(x, n_samples=n_samples)
+        recon_samples_in_batch_dim = recon.view(torch.Size([-1])+recon.shape[2:])
+        x_repeated = x.unsqueeze(0).repeat(recon.shape[0], 1, 1, 1).view(torch.Size([-1])+x.shape[1:])
+        if self.aa_weights is not None:
+            log_prob_x = ((-self.loss_fn(recon_samples_in_batch_dim, x_repeated).view(torch.Size([-1, x.shape[0]])+recon.shape[3:])).sum(-1) / self.aa_weights[x].sum(dim=-1)) * x.shape[1]
         else:
-            recon_loss = self.loss_fn(recon, x).sum(dim=-1).mean()
+            log_prob_x = -self.loss_fn(recon_samples_in_batch_dim, x_repeated).view(torch.Size([-1, x.shape[0]])+recon.shape[3:]).sum(dim=-1)
+
+        # Prior contributions
+        group_sparsity_loss = 0
+        if self.hparams.sparsity_prior:
+            log_prob_x += -self.hparams.sparsity_prior_lambda * self.sparsity_prior.log_prob(self.S.weight).sum()
+            
+        recon_loss = -log_prob_x.mean()
         kl_loss = D.kl_divergence(q_dist, self.prior).mean()
-        loss = recon_loss + self.beta * kl_loss
-        acc = (recon.argmax(dim=1) == x)[x!=aa1_to_index['-']].float().mean()
+        
+        if self.hparams.iwae_bound:
+            # importance weighted autoencoder bound
+            loss = -torch.mean(torch.logsumexp((log_prob_x + self.prior.log_prob(z_samples) - q_dist.log_prob(z_samples)), dim=0) - np.log(z_samples.shape[0]))
+        else:
+            # standard elbo
+            loss = -torch.mean(log_prob_x + self.prior.log_prob(z_samples) - q_dist.log_prob(z_samples))
+
+        acc = (recon.mean(dim=0).argmax(dim=1) == x)[x!=aa1_to_index['-']].float().mean()
         return loss, recon_loss, kl_loss, acc
 
     def training_step(self, batch, batch_idx):
@@ -207,28 +280,33 @@ class VAE(pl.LightningModule, EmbeddedManifold):
         else:        
             return torch.optim.Adam(self.parameters(), lr=self.hparams.lr)
 
-    def validation_step(self, batch, batch_idx):
-        loss, recon_loss, kl_loss, acc = self._step(batch, batch_idx)
+    # def validation_step(self, batch, batch_idx):
+    #     loss, recon_loss, kl_loss, acc = self._step(batch, batch_idx)
 
-        self.log_dict({'val_loss': loss,
-                       'val_recon': recon_loss,
-                       'val_kl': kl_loss,
-                       'val_acc': acc,
-                       'beta': self.beta})
+    #     self.log_dict({'val_loss': loss,
+    #                    'val_recon': recon_loss,
+    #                    'val_kl': kl_loss,
+    #                    'val_acc': acc,
+    #                    'beta': self.beta})
 
-    def test_step(self, batch, batch_idx):
-        loss, recon_loss, kl_loss, acc = self._step(batch, batch_idx)
+    # def test_step(self, batch, batch_idx):
+    #     loss, recon_loss, kl_loss, acc = self._step(batch, batch_idx)
 
-        self.log_dict({'test_loss': loss,
-                       'test_recon': recon_loss,
-                       'test_kl': kl_loss,
-                       'test_acc': acc,
-                       'beta': self.beta})
+    #     self.log_dict({'test_loss': loss,
+    #                    'test_recon': recon_loss,
+    #                    'test_kl': kl_loss,
+    #                    'test_acc': acc,
+    #                    'beta': self.beta})
 
-    def train_dataloader(self):        
-        train_data = torch.utils.data.TensorDataset(self.data[self.perm[:self.train_idx]])
+    def train_dataloader(self, labels=None):
+        dataset = [self.data[self.perm[:self.train_idx]]]
+        if labels is not None:
+            dataset += [labels[self.perm[:self.train_idx]]]
+        train_data = torch.utils.data.TensorDataset(*dataset)
         if self.weights is not None:
-          sampler = torch.utils.data.sampler.WeightedRandomSampler(self.weights[self.perm[:self.train_idx]], len(self.weights[:self.train_idx]))
+          weights_normalized = self.weights[self.perm[:self.train_idx]]
+          weights_normalized /= weights_normalized.sum()
+          sampler = torch.utils.data.sampler.WeightedRandomSampler(weights_normalized, len(weights_normalized))
           return torch.utils.data.DataLoader(train_data, batch_size=self.hparams.bs, sampler = sampler)
         else:
           return torch.utils.data.DataLoader(train_data, batch_size=self.hparams.bs)
@@ -248,6 +326,7 @@ class VAE(pl.LightningModule, EmbeddedManifold):
         if curve.dim() == 2: curve.unsqueeze_(0) # BxNxd
 
         recon = self.decode(curve, as_probs=True) # BxNxFxS
+
         x = recon[:,:-1,:,:]; y = recon[:,1:,:,:]; # Bx(N-1)xFxS
         dt = torch.norm(curve[:,:-1,:] - curve[:,1:,:], p=2, dim=-1) # Bx(N-1)
         energy = (1-(x*y).sum(dim=2)).sum(dim=-1) # Bx(N-1) 
@@ -256,20 +335,6 @@ class VAE(pl.LightningModule, EmbeddedManifold):
     def curve_length(self, curve):
         return torch.sqrt(self.curve_energy(curve))
 
-def curve_energy(model, curve, weight=0.0):
-    if curve.dim() == 2:
-        curve.unsqueeze_(0) # BxNxd
-
-    recon, switch = model.decode(curve, as_probs=True, return_s=True) # BxNxFxS
-    x = recon[:,:-1,:,:]; y = recon[:,1:,:,:];
-    dt = torch.norm(curve[:,1:,:] - curve[:,:-1,:], p=2, dim=-1) # BxN
-    energy = (2*(1 - (x * y).sum(dim=2))) # BxNxhparamsS
-    energy = energy.mean(dim=-1) # BxN, use mean instead of sum for stability
-    energy = (energy * dt) # BxN
-    regulizer = (switch[:,:1,:,:] + switch[:,:-1,:,:]) / 2.0 # mean switch activation
-    regulizer = weight*regulizer.view(energy.shape)*dt # BxN
-    return (energy + regulizer).sum(dim=-1) # B
-
 
 def numeric_curve_optimizer(model, curve):
     optimizer = torch.optim.Adam([curve.parameters], lr=1e-2)
@@ -277,7 +342,7 @@ def numeric_curve_optimizer(model, curve):
     best_curve, best_loss = deepcopy(curve), float('inf')
     for i in range(10):
         optimizer.zero_grad()
-        loss = curve_energy(model, curve(alpha), 1.0).sum()
+        loss = model.curve_energy(curve(alpha)).sum()
         loss.backward()
         optimizer.step()
         grad_size = torch.max(torch.abs(curve.parameters.grad))
@@ -291,17 +356,32 @@ def numeric_curve_optimizer(model, curve):
 
 
 def get_hparams(args=None):
+
+    def str2bool(v):
+        if isinstance(v, bool):
+            return v
+        if v.lower() in ('yes', 'true', 't', 'y', '1'):
+            return True
+        elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+            return False
+        else:
+            raise argparse.ArgumentTypeError('Boolean value expected.')
     
-    argparser = ArgumentParser()
+    argparser = argparse.ArgumentParser()
     argparser.add_argument('-lr', default=1e-3, type=float)
     argparser.add_argument('-bs', default=16, type=int)
-    argparser.add_argument('-gpu', default=1, type=bool)
+    argparser.add_argument('-gpu', default=1, nargs='?', type=str2bool)
     argparser.add_argument('-load_from', default='')
     argparser.add_argument('-epochs', default=20, type=int)
+    argparser.add_argument('-zdim', default=2, type=int)
     argparser.add_argument('-seed', default=123, type=int)
     argparser.add_argument('-train_fraction', default=0.8, type=float)
     argparser.add_argument('-val_fraction', default=0.1, type=float)
     argparser.add_argument('-kl_warmup_steps', default=1, type=int)
+    argparser.add_argument('-iwae_bound', default=0, nargs='?', type=str2bool)
+    argparser.add_argument('-sparsity_prior', default=0, nargs='?', type=str2bool)
+    argparser.add_argument('-mask_out_gaps', default=0, nargs='?', type=str2bool)
+    argparser.add_argument('-sparsity_prior_lambda', default=1e-4, nargs='?', type=float)
 
     return argparser.parse_args(args)
 

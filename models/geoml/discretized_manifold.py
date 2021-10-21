@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import torch
 import networkx as nx
+from math import ceil
 from .manifold import CubicSpline
 from .curve import DiscreteCurve
 
@@ -142,3 +143,68 @@ class DiscretizedManifold:
         curve.fit(t, coordinates)
 
         return curve
+
+
+class FastDiscretizedManifold(DiscretizedManifold):
+    def __init__(self, model, grid, use_diagonals=False, batch_size=4, external_curve_length_function=None):
+        self.grid = grid
+        self.G = nx.Graph()
+
+        if grid.shape[0] != 2:
+            raise Exception('Currently we only support 2D grids -- sorry!')
+
+        # Add nodes to graph
+        dim, xsize, ysize = grid.shape
+        node_idx = lambda x, y: x*ysize + y
+        self.G.add_nodes_from(range(xsize*ysize))
+
+        point_set = torch.stack(
+            torch.meshgrid([torch.linspace(0,xsize-1,xsize), torch.linspace(0,ysize-1,ysize)])
+        ).reshape(2,-1).T.long()
+
+        point_sets = [ ]  # these will be [N, 2] matrices of index points
+        neighbour_funcs = [ ]  # these will be functions for getting the neighbour index
+
+        # add sets
+        point_sets.append(point_set[point_set[:, 0] > 0])  # x > 0
+        neighbour_funcs.append([lambda x: x-1, lambda y: y])
+
+        point_sets.append(point_set[point_set[:, 1] > 0])  # y > 0
+        neighbour_funcs.append([lambda x: x, lambda y: y-1])
+
+        point_sets.append(point_set[point_set[:, 0] < xsize-1])  # x < xsize-1
+        neighbour_funcs.append([lambda x: x+1, lambda y: y])
+
+        point_sets.append(point_set[point_set[:, 1] < ysize-1])  # y < ysize-1
+        neighbour_funcs.append([lambda x: x, lambda y: y+1])
+        
+        if use_diagonals:
+            point_sets.append(point_set[torch.logical_and(point_set[:,0] > 0, point_set[:,1] > 0)])
+            neighbour_funcs.append([lambda x: x-1, lambda y: y-1])
+
+            point_sets.append(point_set[torch.logical_and(point_set[:,0] < xsize-1, point_set[:,1] > 0)])
+            neighbour_funcs.append([lambda x: x+1, lambda y: y-1])       
+        
+        t = torch.linspace(0, 1, 5)
+        for ps, nf in zip(point_sets, neighbour_funcs):
+            for i in range(ceil(ps.shape[0]  / batch_size)):
+                x = ps[batch_size*i:batch_size*(i+1), 0]
+                y = ps[batch_size*i:batch_size*(i+1), 1]
+                xn = nf[0](x); yn = nf[1](y)
+                
+                bs = x.shape[0]  # may be different from batch size for the last batch
+
+                line = CubicSpline(begin=torch.zeros(bs, dim), end=torch.ones(bs, dim), num_nodes=2)
+                line.begin = grid[:, x, y].T
+                line.end = grid[:, xn, yn].T
+
+                if external_curve_length_function:
+                    weight = external_curve_length_function(model, line(t))
+                else:
+                    weight = model.curve_length(line(t))
+
+                node_index1 = node_idx(x, y)
+                node_index2 = node_idx(xn, yn)
+
+                for n1, n2, w in zip(node_index1, node_index2, weight):
+                    self.G.add_edge(n1.item(), n2.item(), weight=w.item())

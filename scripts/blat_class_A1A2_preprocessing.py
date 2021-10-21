@@ -43,8 +43,8 @@ def process_data(current_directory='.'):
         for i in range(len(result)):
             row = result.iloc[i]
             if len(row['Sequence']) > 0:
-                info_map[row['Entry']] = row.fillna('Other').to_dict()
-                
+                info_map[row['Entry']] = row.fillna('Unknown').to_dict()
+    
     records = []
     records_full = []
     uniprot_ids_processed = {}
@@ -70,6 +70,9 @@ def process_data(current_directory='.'):
                 )
             records_full.append(record_full)
         else:
+            record = record_map[id]
+            record.description = "[Unknown]"
+            records.append(record)
             print("Not found: ", id, info_map_key)
 
     with open(os.path.join(current_directory, "BLAT_ECOLX_1_b0.5_labeled.fasta"), "w") as output_handle:
