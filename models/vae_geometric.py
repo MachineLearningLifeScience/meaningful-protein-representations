@@ -96,7 +96,9 @@ class VAE(pl.LightningModule, EmbeddedManifold):
                 nn.ReLU())
 
         self.encoder_mu = nn.Linear(self.encoder_architecture[-1], zdim)
-        self.encoder_scale = nn.Sequential(nn.Linear(self.encoder_architecture[-1], zdim), nn.Softplus())
+
+        if not ("simplify_to_ae" in self.hparams and self.hparams.simplify_to_ae):
+            self.encoder_scale = nn.Sequential(nn.Linear(self.encoder_architecture[-1], zdim), nn.Softplus())
 
         if "sparsity_prior" in self.hparams and self.hparams.sparsity_prior:
         
@@ -216,9 +218,13 @@ class VAE(pl.LightningModule, EmbeddedManifold):
         x = nn.functional.one_hot(x, len(aa1_to_index))
         h = self.encoder(x.float().reshape(x.shape[0], -1))
 
-        q_dist = D.Independent(D.Normal(self.encoder_mu(h),
-                                        self.encoder_scale(h) + 1e-4), 1)
-        z_samples = q_dist.rsample(torch.Size([n_samples]))
+        if not ("simplify_to_ae" in self.hparams and self.hparams.simplify_to_ae):        
+            q_dist = D.Independent(D.Normal(self.encoder_mu(h),
+                                            self.encoder_scale(h) + 1e-4), 1)
+            z_samples = q_dist.rsample(torch.Size([n_samples]))
+        else:
+            q_dist = None
+            z_samples = self.encoder_mu(h).unsqueeze(0)
 
         recon = self.decode(z_samples)
         return recon, q_dist, z_samples
@@ -245,14 +251,20 @@ class VAE(pl.LightningModule, EmbeddedManifold):
             log_prob_x += -self.hparams.sparsity_prior_lambda * self.sparsity_prior.log_prob(self.S.weight).sum()
             
         recon_loss = -log_prob_x.mean()
-        kl_loss = D.kl_divergence(q_dist, self.prior).mean()
+
+        kl_loss = 0
         
-        if self.hparams.iwae_bound:
-            # importance weighted autoencoder bound
-            loss = -torch.mean(torch.logsumexp((log_prob_x + self.prior.log_prob(z_samples) - q_dist.log_prob(z_samples)), dim=0) - np.log(z_samples.shape[0]))
+        if ("simplify_to_ae" in self.hparams and self.hparams.simplify_to_ae):
+            loss = recon_loss
         else:
-            # standard elbo
-            loss = -torch.mean(log_prob_x + self.prior.log_prob(z_samples) - q_dist.log_prob(z_samples))
+            kl_loss = D.kl_divergence(q_dist, self.prior).mean()
+            
+            if self.hparams.iwae_bound:
+                # importance weighted autoencoder bound
+                loss = -torch.mean(torch.logsumexp((log_prob_x + self.prior.log_prob(z_samples) - q_dist.log_prob(z_samples)), dim=0) - np.log(z_samples.shape[0]))
+            else:
+                # standard elbo
+                loss = -torch.mean(log_prob_x + self.prior.log_prob(z_samples) - q_dist.log_prob(z_samples))
 
         acc = (recon.mean(dim=0).argmax(dim=1) == x)[x!=aa1_to_index['-']].float().mean()
         return loss, recon_loss, kl_loss, acc
@@ -298,12 +310,12 @@ class VAE(pl.LightningModule, EmbeddedManifold):
     #                    'test_acc': acc,
     #                    'beta': self.beta})
 
-    def train_dataloader(self, labels=None):
+    def train_dataloader(self, labels=None, reweighting=True):
         dataset = [self.data[self.perm[:self.train_idx]]]
         if labels is not None:
             dataset += [labels[self.perm[:self.train_idx]]]
         train_data = torch.utils.data.TensorDataset(*dataset)
-        if self.weights is not None:
+        if self.weights is not None and reweighting:
           weights_normalized = self.weights[self.perm[:self.train_idx]]
           weights_normalized /= weights_normalized.sum()
           sampler = torch.utils.data.sampler.WeightedRandomSampler(weights_normalized, len(weights_normalized))
@@ -382,6 +394,7 @@ def get_hparams(args=None):
     argparser.add_argument('-sparsity_prior', default=0, nargs='?', type=str2bool)
     argparser.add_argument('-mask_out_gaps', default=0, nargs='?', type=str2bool)
     argparser.add_argument('-sparsity_prior_lambda', default=1e-4, nargs='?', type=float)
+    argparser.add_argument('-simplify_to_ae', default=0, nargs='?', type=str2bool)
 
     return argparser.parse_args(args)
 
